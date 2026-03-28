@@ -1,0 +1,40 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "business-policy-env"
+version = "1.0.0"
+description = "Business Policy Compliance and Customer Resolution environment"
+requires-python = ">=3.11"
+dependencies = [
+  "fastapi==0.115.12",
+  "uvicorn==0.34.0",
+  "pydantic==2.10.6",
+  "Faker==37.1.0",
+  "httpx==0.28.1",
+  "openai==1.68.2",
+  "gradio>=4.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==8.3.5",
+  "ruff>=0.11.0",
+  "mypy>=1.11.0",
+]
+
+[tool.setuptools.packages.find]
+include = ["business_policy_env*"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+ignore_missing_imports = true

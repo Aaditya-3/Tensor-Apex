@@ -3,8 +3,8 @@ version: 1.0.0
 description: >-
   A Business Policy Compliance and Customer Resolution environment for policy-aware
   email operations under uncertainty. Agents must route, prioritize, escalate,
-  request clarification, and draft responses while obeying explicit refund,
-  SLA, legal-risk, VIP, and suspended-account policies.
+  request clarification, flag fraud, snooze timelines, and draft responses while
+  obeying explicit refund, SLA, legal-risk, VIP, and suspended-account policies.
 entrypoint: business_policy_env.server:app
 framework: fastapi
 language: python
@@ -14,6 +14,19 @@ endpoints:
   reset: /reset
   step: /step
   state: /state
+  close_session: /session
+session:
+  header: X-Session-Id
+  default: default
+actions:
+  - categorize
+  - set_priority
+  - draft_response
+  - escalate
+  - mark_spam
+  - request_info
+  - flag_fraud
+  - snooze
 baseline:
   command: python baseline.py --agent rule
 tasks:

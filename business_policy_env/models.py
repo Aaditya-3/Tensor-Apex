@@ -1,15 +1,34 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Literal, Optional
+from enum import StrEnum
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 Category = Literal["billing", "technical_support", "returns", "legal", "customer_success", "spam"]
 Priority = Literal["low", "medium", "high", "urgent"]
-ActionType = Literal["categorize", "set_priority", "draft_response", "escalate", "mark_spam", "request_info"]
+ActionType = Literal[
+    "categorize",
+    "set_priority",
+    "draft_response",
+    "escalate",
+    "mark_spam",
+    "request_info",
+    "flag_fraud",
+    "snooze",
+]
 Difficulty = Literal["easy", "medium", "hard"]
-SenderTier = Literal["standard", "vip"]
+SenderTier = Literal["standard", "vip", "premier"]
+PolicyVersion = Literal["v1", "v2"]
+
+
+class EpisodePhase(StrEnum):
+    initial = "initial"
+    awaiting_clarification = "awaiting_clarification"
+    post_clarification = "post_clarification"
+    resolving = "resolving"
+    complete = "complete"
 
 
 class EmailMessage(BaseModel):
@@ -31,19 +50,21 @@ class TicketSnapshot(BaseModel):
     thread: list[EmailMessage]
     sender_tier: SenderTier
     account_flags: list[str] = Field(default_factory=list)
-    refund_amount: Optional[float] = None
-    order_id: Optional[str] = None
-    product_name: Optional[str] = None
-    visible_problem_type: Optional[str] = None
+    refund_amount: float | None = None
+    order_id: str | None = None
+    product_name: str | None = None
+    visible_problem_type: str | None = None
 
 
 class GroundTruth(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    expected_category: Optional[Category] = None
-    expected_priority: Optional[Priority] = None
+    expected_category: Category | None = None
+    expected_priority: Priority | None = None
     expected_escalation: bool = False
-    expected_escalation_reason: Optional[str] = None
+    expected_escalation_reason: str | None = None
+    expected_flag_fraud: bool = False
+    fraud_keywords: list[str] = Field(default_factory=list)
     requires_request_info: bool = False
     request_info_first_required: bool = False
     clarification_keywords: list[str] = Field(default_factory=list)
@@ -62,8 +83,9 @@ class TaskScenario(BaseModel):
     objective: str
     max_steps: int
     now: datetime
+    policy_version: PolicyVersion = "v1"
     initial_snapshot: TicketSnapshot
-    clarification_snapshot: Optional[TicketSnapshot] = None
+    clarification_snapshot: TicketSnapshot | None = None
     ground_truth: GroundTruth
 
 
@@ -72,31 +94,41 @@ class Action(BaseModel):
 
     action_type: ActionType
     reasoning: str = Field(min_length=3)
-    category: Optional[Category] = None
-    priority: Optional[Priority] = None
-    response_text: Optional[str] = None
-    escalation_reason: Optional[str] = None
-    clarifying_question: Optional[str] = None
+    category: Category | None = None
+    priority: Priority | None = None
+    response_text: str | None = None
+    escalation_reason: str | None = None
+    clarifying_question: str | None = None
+    fraud_reason: str | None = None
+    snooze_hours: int | None = None
 
     @model_validator(mode="after")
-    def validate_action_payload(self) -> "Action":
+    def validate_action_payload(self) -> Action:
         required_fields = {
             "categorize": self.category,
             "set_priority": self.priority,
             "draft_response": self.response_text,
             "escalate": self.escalation_reason,
             "request_info": self.clarifying_question,
+            "flag_fraud": self.fraud_reason,
+            "snooze": self.snooze_hours,
         }
         value = required_fields.get(self.action_type)
-        if self.action_type in required_fields and not value:
+        if self.action_type in required_fields and value in (None, ""):
             field_name = {
                 "categorize": "category",
                 "set_priority": "priority",
                 "draft_response": "response_text",
                 "escalate": "escalation_reason",
                 "request_info": "clarifying_question",
+                "flag_fraud": "fraud_reason",
+                "snooze": "snooze_hours",
             }[self.action_type]
             raise ValueError(f"{field_name} is required for action_type={self.action_type}")
+
+        if self.action_type == "snooze" and self.snooze_hours is not None and self.snooze_hours <= 0:
+            raise ValueError("snooze_hours must be greater than 0")
+
         return self
 
 
@@ -118,23 +150,25 @@ class Observation(BaseModel):
     thread: list[EmailMessage]
     sender_tier: SenderTier
     account_flags: list[str]
-    refund_amount: Optional[float] = None
+    refund_amount: float | None = None
     issue_age_hours: float
     emails_remaining: int
     steps_taken: int
     max_steps: int
     action_history: list[ActionRecord]
     policy_rules: list[str]
+    policy_version: PolicyVersion = "v1"
     task_objective: str
     clarification_received: bool = False
+    episode_phase: EpisodePhase = EpisodePhase.initial
 
 
 class StepInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     valid_action: bool
-    final_score: Optional[float] = None
-    partial_score: Optional[float] = None
+    final_score: float | None = None
+    partial_score: float | None = None
     policy_violations: list[str] = Field(default_factory=list)
     reward_breakdown: dict[str, float] = Field(default_factory=dict)
     explanation: str
@@ -152,8 +186,8 @@ class StepResult(BaseModel):
 class ResetRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    task_name: Optional[Difficulty] = None
-    scenario_id: Optional[str] = None
+    task_name: Difficulty | None = None
+    scenario_id: str | None = None
 
 
 class StepRequest(BaseModel):

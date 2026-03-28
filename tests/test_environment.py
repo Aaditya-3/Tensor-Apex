@@ -23,7 +23,15 @@ class EnvironmentTests(unittest.TestCase):
                 Action(
                     action_type="request_info",
                     reasoning="Need clarification before routing.",
-                    clarifying_question="Can you confirm whether you need a refund, replacement, or billing help for this order?",
+                    clarifying_question="Can you confirm whether you need a refund, replacement, or billing help?",
+                )
+            )
+        if scenario.ground_truth.expected_flag_fraud:
+            actions.append(
+                Action(
+                    action_type="flag_fraud",
+                    reasoning="Fraud signal detected.",
+                    fraud_reason="Suspicious pattern indicates fraud risk.",
                 )
             )
         actions.append(
@@ -49,7 +57,12 @@ class EnvironmentTests(unittest.TestCase):
                 )
             )
         if scenario.difficulty != "easy":
-            keywords = list(dict.fromkeys(scenario.ground_truth.response_keywords + scenario.ground_truth.history_keywords))
+            keywords = list(
+                dict.fromkeys(
+                    scenario.ground_truth.response_keywords
+                    + scenario.ground_truth.history_keywords
+                )
+            )
             response = " ".join(keywords) if keywords else "We are reviewing this now."
             actions.append(
                 Action(
@@ -81,11 +94,12 @@ class EnvironmentTests(unittest.TestCase):
         self.assertEqual(reset_observation.steps_taken, 0)
         self.assertEqual(reset_observation.action_history, [])
         self.assertFalse(reset_observation.clarification_received)
+        self.assertEqual(reset_observation.episode_phase.value, "initial")
 
-    def test_invalid_action_is_negative_and_does_not_change_state(self) -> None:
+    def test_invalid_action_does_not_change_state(self) -> None:
         self.env.reset(scenario_id="easy_vip_refund")
         observation, reward, done, info = self.env.step({"action_type": "categorize", "reasoning": "Missing field"})
-        self.assertLess(reward, 0)
+        self.assertEqual(reward, 0.0)
         self.assertFalse(done)
         self.assertFalse(info["valid_action"])
         self.assertEqual(observation.steps_taken, 0)
@@ -101,26 +115,28 @@ class EnvironmentTests(unittest.TestCase):
             )
         )
         self.assertEqual(observation.steps_taken, 1)
-        self.assertAlmostEqual(reward, -0.15)
+        self.assertEqual(reward, 0.0)
         self.assertFalse(done)
         self.assertTrue(info["policy_violations"])
+        self.assertEqual(info["reward_breakdown"]["policy_penalty"], -0.2)
 
     def test_ambiguous_ticket_scores_zero_when_request_info_is_skipped(self) -> None:
         self.env.reset(scenario_id="medium_charge_or_bug")
-        scripted_actions = [
-            Action(action_type="categorize", reasoning="Guessing billing.", category="billing"),
-            Action(action_type="set_priority", reasoning="Guessing high.", priority="high"),
-            Action(action_type="draft_response", reasoning="Replying.", response_text="We are checking this now."),
-            Action(action_type="draft_response", reasoning="Replying again.", response_text="We are checking this now."),
-            Action(action_type="draft_response", reasoning="Replying again.", response_text="We are checking this now."),
-            Action(action_type="draft_response", reasoning="Replying again.", response_text="We are checking this now."),
-        ]
         final_info = None
         done = False
-        for action in scripted_actions:
+        while not done:
+            action = (
+                Action(action_type="categorize", reasoning="Guessing billing.", category="billing")
+                if self.env.state()["internal_variables"]["steps_taken"] == 0
+                else Action(action_type="set_priority", reasoning="Guessing high.", priority="high")
+                if self.env.state()["internal_variables"]["steps_taken"] == 1
+                else Action(
+                    action_type="draft_response",
+                    reasoning="Replying.",
+                    response_text="We are checking this now.",
+                )
+            )
             _, _, done, final_info = self.env.step(action)
-            if done:
-                break
         self.assertTrue(done)
         self.assertIsNotNone(final_info)
         self.assertEqual(final_info["final_score"], 0.0)
@@ -146,6 +162,40 @@ class EnvironmentTests(unittest.TestCase):
         state_response = client.get("/state")
         self.assertEqual(state_response.status_code, 200)
         self.assertTrue(state_response.json()["active"])
+
+    def test_session_isolation(self) -> None:
+        client = TestClient(app)
+        client.post("/reset", json={"scenario_id": "easy_vip_refund"}, headers={"X-Session-Id": "session_a"})
+        client.post("/reset", json={"scenario_id": "easy_sla_breach"}, headers={"X-Session-Id": "session_b"})
+        state_a = client.get("/state", headers={"X-Session-Id": "session_a"}).json()
+        state_b = client.get("/state", headers={"X-Session-Id": "session_b"}).json()
+        self.assertNotEqual(
+            state_a["current_task_configuration"]["title"],
+            state_b["current_task_configuration"]["title"],
+        )
+
+    def test_snooze_crosses_sla_threshold(self) -> None:
+        self.env.reset(scenario_id="easy_sla_marginal")
+        obs, _, _, info = self.env.step(
+            Action(
+                action_type="snooze",
+                reasoning="Waiting for customer reply.",
+                snooze_hours=2,
+            )
+        )
+        self.assertGreater(obs.issue_age_hours, 72)
+        self.assertEqual(info["reward_breakdown"]["snooze_sla_penalty"], -0.1)
+
+    def test_flag_fraud_scores_correctly(self) -> None:
+        self.env.reset(scenario_id="hard_fraud_chargeback")
+        _, reward, _, _ = self.env.step(
+            Action(
+                action_type="flag_fraud",
+                reasoning="Multiple rapid refund requests from different cards.",
+                fraud_reason="Chargeback pattern consistent with card testing fraud.",
+            )
+        )
+        self.assertGreater(reward, 0.0)
 
     def test_rule_baseline_runs_one_episode(self) -> None:
         scenario_id = "hard_old_invoice_question"

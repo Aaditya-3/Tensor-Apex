@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+from datetime import datetime
 from functools import lru_cache
+from typing import Any
 
 from .data_generation import build_scenarios
 from .models import Action, TaskScenario, TicketSnapshot
 from .policies import policies_satisfied
 
+GroundTruthPayload = dict[str, Any]
 
-def compute_issue_age_hours(snapshot: TicketSnapshot, now) -> float:
+
+def compute_issue_age_hours(snapshot: TicketSnapshot, now: datetime) -> float:
     first_timestamp = snapshot.thread[0].timestamp
     return round((now - first_timestamp).total_seconds() / 3600, 2)
 
@@ -27,13 +31,16 @@ def scenarios_for_task(task_name: str | None = None) -> list[TaskScenario]:
     )
 
 
-def build_ground_truth_payload(scenario: TaskScenario, snapshot: TicketSnapshot) -> dict:
+def build_ground_truth_payload(scenario: TaskScenario, snapshot: TicketSnapshot) -> GroundTruthPayload:
     return {
         "difficulty": scenario.difficulty,
+        "policy_version": scenario.policy_version,
         "expected_category": scenario.ground_truth.expected_category,
         "expected_priority": scenario.ground_truth.expected_priority,
         "expected_escalation": scenario.ground_truth.expected_escalation,
         "expected_escalation_reason": scenario.ground_truth.expected_escalation_reason,
+        "expected_flag_fraud": scenario.ground_truth.expected_flag_fraud,
+        "fraud_keywords": scenario.ground_truth.fraud_keywords,
         "requires_request_info": scenario.ground_truth.requires_request_info,
         "request_info_first_required": scenario.ground_truth.request_info_first_required,
         "clarification_keywords": scenario.ground_truth.clarification_keywords,
@@ -75,6 +82,25 @@ def _keyword_score(text: str | None, keywords: list[str]) -> float:
     return min(1.0, hits / len(keywords))
 
 
+def _hard_response_score(response_text: str | None, response_keywords: list[str], history_keywords: list[str]) -> float:
+    if not response_text:
+        return 0.0
+
+    exact_score = _keyword_score(response_text, response_keywords + history_keywords)
+
+    acknowledgment_signals = ["apolog", "understand", "recogni", "aware", "noted", "received"]
+    timeline_signals = ["day", "hour", "week", "wait", "since", "ago", "delay", "time"]
+    action_signals = ["escalat", "review", "priorit", "team", "follow", "update", "resolve", "process"]
+
+    lowered = response_text.lower()
+    ack_hit = any(signal in lowered for signal in acknowledgment_signals)
+    time_hit = any(signal in lowered for signal in timeline_signals)
+    action_hit = any(signal in lowered for signal in action_signals)
+    semantic_score = (ack_hit + time_hit + action_hit) / 3.0
+
+    return round(0.6 * exact_score + 0.4 * semantic_score, 4)
+
+
 def _categorize_score(actions: list[Action], expected_category: str | None) -> float:
     if expected_category is None:
         return 1.0
@@ -98,52 +124,71 @@ def _escalation_score(actions: list[Action], expected_escalation: bool) -> float
     return 1.0 if escalated == expected_escalation else 0.0
 
 
-def _policy_score(actions: list[Action], ground_truth: dict) -> float:
+def _fraud_score(actions: list[Action], expected_flag_fraud: bool) -> float:
+    flagged = any(action.action_type == "flag_fraud" for action in actions)
+    return 1.0 if flagged == expected_flag_fraud else 0.0
+
+
+def _policy_score(actions: list[Action], ground_truth: GroundTruthPayload) -> float:
     snapshot = TicketSnapshot.model_validate(ground_truth["snapshot"])
-    return 1.0 if policies_satisfied(actions, snapshot, float(ground_truth["issue_age_hours"])) else 0.0
+    return (
+        1.0
+        if policies_satisfied(
+            actions,
+            snapshot,
+            float(ground_truth["issue_age_hours"]),
+            ground_truth["policy_version"],
+        )
+        else 0.0
+    )
 
 
-def easy_grader(actions: list[Action], ground_truth: dict) -> float:
+def easy_grader(actions: list[Action], ground_truth: GroundTruthPayload) -> float:
     components = easy_components(actions, ground_truth)
     return round(
-        0.4 * components["category_correct"]
-        + 0.35 * components["priority_correct"]
-        + 0.25 * components["policy_compliance"],
+        0.35 * components["category_correct"]
+        + 0.3 * components["priority_correct"]
+        + 0.2 * components["policy_compliance"]
+        + 0.15 * components["fraud_handling"],
         4,
     )
 
 
-
-def easy_components(actions: list[Action], ground_truth: dict) -> dict[str, float]:
+def easy_components(actions: list[Action], ground_truth: GroundTruthPayload) -> dict[str, float]:
     return {
         "category_correct": _categorize_score(actions, ground_truth["expected_category"]),
         "priority_correct": _priority_score(actions, ground_truth["expected_priority"]),
         "policy_compliance": _policy_score(actions, ground_truth),
+        "fraud_handling": _fraud_score(actions, bool(ground_truth["expected_flag_fraud"])),
     }
 
 
-def medium_grader(actions: list[Action], ground_truth: dict) -> float:
+def medium_grader(actions: list[Action], ground_truth: GroundTruthPayload) -> float:
     if ground_truth["request_info_first_required"]:
         if not actions or actions[0].action_type != "request_info":
             return 0.0
     components = medium_components(actions, ground_truth)
     return round(
-        0.25 * components["ambiguity_recognition"]
-        + 0.2 * components["clarifying_question_quality"]
+        0.2 * components["ambiguity_recognition"]
+        + 0.15 * components["clarifying_question_quality"]
         + 0.15 * components["policy_compliance"]
         + 0.1 * components["category_correct"]
-        + 0.05 * components["priority_correct"]
-        + 0.25 * components["response_appropriateness"],
+        + 0.1 * components["priority_correct"]
+        + 0.2 * components["response_appropriateness"]
+        + 0.1 * components["fraud_handling"],
         4,
     )
 
 
-def medium_components(actions: list[Action], ground_truth: dict) -> dict[str, float]:
+def medium_components(actions: list[Action], ground_truth: GroundTruthPayload) -> dict[str, float]:
     request_info_action = actions[0] if actions and actions[0].action_type == "request_info" else None
     draft_action = latest_action(actions, "draft_response")
     return {
         "ambiguity_recognition": 1.0 if request_info_action else 0.0,
-        "clarifying_question_quality": _request_info_quality(request_info_action, ground_truth["clarification_keywords"]),
+        "clarifying_question_quality": _request_info_quality(
+            request_info_action,
+            ground_truth["clarification_keywords"],
+        ),
         "policy_compliance": _policy_score(actions, ground_truth),
         "category_correct": _categorize_score(actions, ground_truth["expected_category"]),
         "priority_correct": _priority_score(actions, ground_truth["expected_priority"]),
@@ -151,10 +196,11 @@ def medium_components(actions: list[Action], ground_truth: dict) -> dict[str, fl
             draft_action.response_text if draft_action else None,
             ground_truth["response_keywords"],
         ),
+        "fraud_handling": _fraud_score(actions, bool(ground_truth["expected_flag_fraud"])),
     }
 
 
-def hard_grader(actions: list[Action], ground_truth: dict) -> float:
+def hard_grader(actions: list[Action], ground_truth: GroundTruthPayload) -> float:
     if ground_truth["request_info_first_required"]:
         if not actions or actions[0].action_type != "request_info":
             return 0.0
@@ -163,17 +209,22 @@ def hard_grader(actions: list[Action], ground_truth: dict) -> float:
         0.1 * components["temporal_reasoning"]
         + 0.1 * components["policy_compliance"]
         + 0.1 * components["escalation_accuracy"]
-        + 0.3 * components["history_acknowledgment"]
-        + 0.4 * components["response_completeness"],
+        + 0.25 * components["history_acknowledgment"]
+        + 0.35 * components["response_completeness"]
+        + 0.1 * components["fraud_handling"],
         4,
     )
 
 
-def hard_components(actions: list[Action], ground_truth: dict) -> dict[str, float]:
+def hard_components(actions: list[Action], ground_truth: GroundTruthPayload) -> dict[str, float]:
     draft_action = latest_action(actions, "draft_response")
     response_text = draft_action.response_text if draft_action else None
     response_keywords = _keyword_score(response_text, ground_truth["response_keywords"])
-    history_score = _keyword_score(response_text, ground_truth["history_keywords"])
+    history_score = _hard_response_score(
+        response_text,
+        ground_truth["response_keywords"],
+        ground_truth["history_keywords"],
+    )
     category_score = _categorize_score(actions, ground_truth["expected_category"])
     policy_score = 1.0 if _policy_score(actions, ground_truth) == 1.0 and category_score == 1.0 else 0.0
     return {
@@ -182,10 +233,11 @@ def hard_components(actions: list[Action], ground_truth: dict) -> dict[str, floa
         "escalation_accuracy": _escalation_score(actions, ground_truth["expected_escalation"]),
         "history_acknowledgment": history_score,
         "response_completeness": response_keywords,
+        "fraud_handling": _fraud_score(actions, bool(ground_truth["expected_flag_fraud"])),
     }
 
 
-def grade_actions(actions: list[Action], ground_truth: dict) -> float:
+def grade_actions(actions: list[Action], ground_truth: GroundTruthPayload) -> float:
     difficulty = ground_truth["difficulty"]
     if difficulty == "easy":
         return easy_grader(actions, ground_truth)
@@ -194,7 +246,7 @@ def grade_actions(actions: list[Action], ground_truth: dict) -> float:
     return hard_grader(actions, ground_truth)
 
 
-def component_scores(actions: list[Action], ground_truth: dict) -> dict[str, float]:
+def component_scores(actions: list[Action], ground_truth: GroundTruthPayload) -> dict[str, float]:
     difficulty = ground_truth["difficulty"]
     if difficulty == "easy":
         return easy_components(actions, ground_truth)
