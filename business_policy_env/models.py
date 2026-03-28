@@ -17,6 +17,7 @@ ActionType = Literal[
     "request_info",
     "flag_fraud",
     "snooze",
+    "consult_specialist",
 ]
 Difficulty = Literal["easy", "medium", "hard"]
 SenderTier = Literal["standard", "vip", "premier"]
@@ -50,6 +51,7 @@ class TicketSnapshot(BaseModel):
     thread: list[EmailMessage]
     sender_tier: SenderTier
     account_flags: list[str] = Field(default_factory=list)
+    internal_flags: list[str] = Field(default_factory=list)
     refund_amount: float | None = None
     order_id: str | None = None
     product_name: str | None = None
@@ -69,9 +71,13 @@ class GroundTruth(BaseModel):
     request_info_first_required: bool = False
     clarification_keywords: list[str] = Field(default_factory=list)
     response_keywords: list[str] = Field(default_factory=list)
+    customer_quality_keywords: list[str] = Field(default_factory=list)
     history_keywords: list[str] = Field(default_factory=list)
     completion_action_types: list[ActionType] = Field(default_factory=list)
     ambiguous: bool = False
+    requires_specialist_review: bool = False
+    adversarial_pattern: str | None = None
+    delayed_fraud_step_threshold: int | None = None
 
 
 class TaskScenario(BaseModel):
@@ -84,6 +90,13 @@ class TaskScenario(BaseModel):
     max_steps: int
     now: datetime
     policy_version: PolicyVersion = "v1"
+    policy_shift_step: int | None = None
+    policy_shift_to: PolicyVersion | None = None
+    cost_budget: float = 0.25
+    min_steps_before_completion: int = 0
+    hidden_intent: Literal["honest", "fraudulent", "policy_gaming"] = "honest"
+    specialist_decision: str | None = None
+    adversarial_tags: list[str] = Field(default_factory=list)
     initial_snapshot: TicketSnapshot
     clarification_snapshot: TicketSnapshot | None = None
     ground_truth: GroundTruth
@@ -101,6 +114,7 @@ class Action(BaseModel):
     clarifying_question: str | None = None
     fraud_reason: str | None = None
     snooze_hours: int | None = None
+    specialist_question: str | None = None
 
     @model_validator(mode="after")
     def validate_action_payload(self) -> Action:
@@ -112,6 +126,7 @@ class Action(BaseModel):
             "request_info": self.clarifying_question,
             "flag_fraud": self.fraud_reason,
             "snooze": self.snooze_hours,
+            "consult_specialist": self.specialist_question,
         }
         value = required_fields.get(self.action_type)
         if self.action_type in required_fields and value in (None, ""):
@@ -123,6 +138,7 @@ class Action(BaseModel):
                 "request_info": "clarifying_question",
                 "flag_fraud": "fraud_reason",
                 "snooze": "snooze_hours",
+                "consult_specialist": "specialist_question",
             }[self.action_type]
             raise ValueError(f"{field_name} is required for action_type={self.action_type}")
 
@@ -158,6 +174,10 @@ class Observation(BaseModel):
     action_history: list[ActionRecord]
     policy_rules: list[str]
     policy_version: PolicyVersion = "v1"
+    policy_shift_pending: bool = False
+    policy_shift_at_step: int | None = None
+    policy_shift_to: PolicyVersion | None = None
+    specialist_feedback: str | None = None
     task_objective: str
     clarification_received: bool = False
     episode_phase: EpisodePhase = EpisodePhase.initial

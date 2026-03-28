@@ -61,7 +61,8 @@ def policy_rules_for(version: PolicyVersion) -> list[str]:
 
 def has_fraud_indicators(snapshot: TicketSnapshot) -> bool:
     body_text = " ".join(message.body.lower() for message in snapshot.thread)
-    if any(flag in {"fraud_risk", "ato_watch", "chargeback_risk"} for flag in snapshot.account_flags):
+    flags = snapshot.account_flags + snapshot.internal_flags
+    if any(flag in {"fraud_risk", "ato_watch", "chargeback_risk"} for flag in flags):
         return True
     return any(signal in body_text for signal in FRAUD_SIGNALS)
 

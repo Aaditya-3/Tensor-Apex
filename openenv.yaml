@@ -5,12 +5,16 @@ description: >-
   email operations under uncertainty. Agents must route, prioritize, escalate,
   request clarification, flag fraud, snooze timelines, and draft responses while
   obeying explicit refund, SLA, legal-risk, VIP, and suspended-account policies.
+  Some scenarios include deterministic policy drift (v1->v2) and action-cost
+  efficiency tradeoffs, adversarial user deception, hidden risk state, and
+  specialist-review interaction.
 entrypoint: business_policy_env.server:app
 framework: fastapi
 language: python
 port: 7860
 endpoints:
   health: /health
+  tasks: /tasks
   reset: /reset
   step: /step
   state: /state
@@ -27,6 +31,7 @@ actions:
   - request_info
   - flag_fraud
   - snooze
+  - consult_specialist
 baseline:
   command: python baseline.py --agent rule
 tasks:

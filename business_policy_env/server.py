@@ -63,11 +63,14 @@ def step(
 
 
 @app.get("/state")
-def state(x_session_id: str | None = Header(default=None)) -> dict[str, Any]:
+def state(
+    x_session_id: str | None = Header(default=None),
+    include_ground_truth: bool = False,
+) -> dict[str, Any]:
     session_id = _session_or_default(x_session_id)
     if session_id not in _sessions:
         return {"active": False, "detail": "Session not found. Call /reset first."}
-    return _sessions[session_id].state()
+    return _sessions[session_id].state(include_ground_truth=include_ground_truth)
 
 
 @app.delete("/session")

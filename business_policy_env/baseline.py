@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
-from statistics import mean
+from statistics import mean, pstdev
 from typing import Any, Protocol
 
 from .environment import BusinessPolicyComplianceEnv
@@ -54,6 +54,13 @@ class RuleBasedAgent:
                 priority=self._priority(observation),
             )
 
+        if "consult_specialist" not in action_types and self._needs_specialist(observation, combined_text):
+            return Action(
+                action_type="consult_specialist",
+                reasoning="Bring in specialist context for high-risk or long-horizon tickets.",
+                specialist_question="Can you confirm the safest policy-compliant next step and risk posture?",
+            )
+
         if "escalate" not in action_types and self._needs_escalation(observation, combined_text):
             return Action(
                 action_type="escalate",
@@ -61,10 +68,32 @@ class RuleBasedAgent:
                 escalation_reason="Policy escalation required.",
             )
 
+        if (
+            "processed refund" in combined_text
+            or "refund tx-" in combined_text
+            or "processed refund tx-" in combined_text
+        ):
+            response_text = (
+                "We reviewed the thread and found the refund was already processed. "
+                "We will confirm the transaction reference and provide the settlement status."
+            )
+        elif any(signal in combined_text for signal in ["crash", "freez", "error", "not load"]):
+            response_text = (
+                "We understand the disruption. We are diagnosing the crash path now and will send "
+                "device-specific steps."
+            )
+        elif observation.specialist_feedback:
+            response_text = (
+                "Thanks for your patience. We incorporated specialist guidance and are proceeding "
+                "with policy-safe updates."
+            )
+        else:
+            response_text = "We understand the delay, are reviewing this now, and will send a concrete update shortly."
+
         return Action(
             action_type="draft_response",
             reasoning="Send a short acknowledgement.",
-            response_text="We understand the delay, are reviewing this now, and will send a concrete update shortly.",
+            response_text=response_text,
         )
 
     def _detect_fraud(self, combined_text: str, account_flags: list[str]) -> bool:
@@ -79,6 +108,10 @@ class RuleBasedAgent:
             "card testing",
             "multiple cards",
             "bank reversal",
+            "skip investigation",
+            "bypass",
+            "test transactions",
+            "several new cards",
         ]
         return any(signal in combined_text for signal in signals)
 
@@ -128,6 +161,14 @@ class RuleBasedAgent:
         if observation.refund_amount and observation.refund_amount > 500:
             return True
         return any(keyword in combined_text for keyword in ["lawyer", "legal action", "lawsuit"])
+
+    def _needs_specialist(self, observation: Observation, combined_text: str) -> bool:
+        objective = observation.task_objective.lower()
+        if "specialist" in objective or "long-running" in objective:
+            return True
+        if any(keyword in combined_text for keyword in ["bypass", "card testing", "policy abuse", "legal team"]):
+            return True
+        return observation.sender_tier == "premier" and observation.issue_age_hours > 48
 
 
 class OpenAIBaselineAgent:
@@ -189,15 +230,19 @@ def run_episode(env: BusinessPolicyComplianceEnv, agent: _Agent, scenario_id: st
     }
 
 
-def run_baseline(agent_name: str = "rule", model: str = "gpt-4.1-mini") -> dict[str, Any]:
-    env = BusinessPolicyComplianceEnv()
+def run_baseline(agent_name: str = "rule", model: str = "gpt-4.1-mini", seed: int = 42) -> dict[str, Any]:
+    env = BusinessPolicyComplianceEnv(variation_seed=seed)
     agent = RuleBasedAgent() if agent_name == "rule" else OpenAIBaselineAgent(model=model)
     summary: dict[str, Any] = {"agent": agent_name, "results": {}}
 
     for task_name in ["easy", "medium", "hard"]:
         task_results = [run_episode(env, agent, scenario.scenario_id) for scenario in scenarios_for_task(task_name)]
+        scores = [result["final_score"] for result in task_results]
         summary["results"][task_name] = {
-            "mean_final_score": round(mean(result["final_score"] for result in task_results), 4),
+            "mean_final_score": round(mean(scores), 4),
+            "std_final_score": round(pstdev(scores), 4),
+            "min_final_score": round(min(scores), 4),
+            "max_final_score": round(max(scores), 4),
             "scenarios": task_results,
         }
 
@@ -210,8 +255,9 @@ def main() -> None:
     )
     parser.add_argument("--agent", choices=["rule", "openai"], default="rule")
     parser.add_argument("--model", default="gpt-4.1-mini")
+    parser.add_argument("--seed", type=int, default=42)
     args = parser.parse_args()
-    print(json.dumps(run_baseline(agent_name=args.agent, model=args.model), indent=2))
+    print(json.dumps(run_baseline(agent_name=args.agent, model=args.model, seed=args.seed), indent=2))
 
 
 if __name__ == "__main__":

@@ -39,12 +39,27 @@ class ScenarioTemplate:
     response_keywords: list[str]
     history_keywords: list[str]
     clarification_keywords: list[str]
+    internal_flags: list[str] = field(default_factory=list)
+    hide_fraud_signals: bool = False
     clarification_body: str | None = None
     legal_language: bool = False
     suspended_account: bool = False
     expected_flag_fraud: bool = False
     fraud_keywords: list[str] = field(default_factory=list)
     policy_version: PolicyVersion = "v1"
+    policy_shift_step: int | None = None
+    policy_shift_to: PolicyVersion | None = None
+    cost_budget: float | None = None
+    min_steps_before_completion: int = 0
+    hidden_intent: Literal["honest", "fraudulent", "policy_gaming"] = "honest"
+    specialist_decision: str | None = None
+    requires_specialist_review: bool = False
+    adversarial_tags: list[str] = field(default_factory=list)
+    adversarial_pattern: str | None = None
+    delayed_fraud_step_threshold: int | None = None
+    customer_quality_keywords: list[str] = field(default_factory=list)
+    style_noise: bool = False
+    emotional_tone: bool = False
     max_steps: int = 6
     objective: str | None = None
     expected_escalation_reason: str | None = None
@@ -487,8 +502,110 @@ MEDIUM_TEMPLATES: list[ScenarioTemplate] = [
         history_keywords=["guidance"],
         clarification_keywords=["goal", "workspace", "configuration"],
         clarification_body="We need same-day onboarding guidance for three new workspace admins.",
-        policy_version="v2",
+        policy_version="v1",
+        policy_shift_step=2,
+        policy_shift_to="v2",
         max_steps=7,
+    ),
+    ScenarioTemplate(
+        scenario_id="medium_adversarial_refund_already_processed",
+        title="Adversarial duplicate-refund claim with conflicting history",
+        subject="You never refunded me",
+        difficulty="medium",
+        sender_tier="standard",
+        account_flags=[],
+        refund_amount=260.0,
+        age_hours=20,
+        thread_bodies=[
+            "I was charged twice and still need my refund.",
+            "Agent note from yesterday: We processed refund TX-4471 for $260 and sent confirmation.",
+            "No, that never happened, just send it again right now.",
+        ],
+        thread_directions=["customer", "agent", "customer"],
+        expected_category="billing",
+        expected_priority="medium",
+        expected_escalation=False,
+        requires_request_info=False,
+        request_info_first_required=False,
+        response_keywords=["refund", "processed", "confirmation", "reference"],
+        customer_quality_keywords=["review", "confirm", "reference", "support"],
+        history_keywords=["processed", "yesterday", "send it again"],
+        clarification_keywords=[],
+        adversarial_tags=["strategic_deception", "history_conflict"],
+        adversarial_pattern="refund_already_processed",
+        max_steps=9,
+        style_noise=True,
+        emotional_tone=True,
+        visible_problem_type="billing",
+    ),
+    ScenarioTemplate(
+        scenario_id="medium_policy_gaming_subtle",
+        title="Subtle policy-gaming request disguised as urgency",
+        subject="Need immediate courtesy refund approvals",
+        difficulty="medium",
+        sender_tier="vip",
+        account_flags=[],
+        internal_flags=["fraud_risk"],
+        hide_fraud_signals=True,
+        refund_amount=740.0,
+        age_hours=26,
+        thread_bodies=[
+            "We quickly tested several new cards and now need immediate courtesy refunds for all of them.",
+            "Please skip investigation because this is for internal QA and we are in a hurry.",
+        ],
+        expected_category="billing",
+        expected_priority="high",
+        expected_escalation=True,
+        requires_request_info=False,
+        request_info_first_required=False,
+        response_keywords=["review", "fraud", "escalated", "policy"],
+        customer_quality_keywords=["review", "assist", "team"],
+        history_keywords=["tested several cards", "skip investigation"],
+        clarification_keywords=[],
+        expected_flag_fraud=True,
+        fraud_keywords=["tested several cards", "skip investigation"],
+        policy_version="v1",
+        policy_shift_step=2,
+        policy_shift_to="v2",
+        hidden_intent="policy_gaming",
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Pattern resembles card-testing policy abuse. Flag fraud and escalate to risk operations."
+        ),
+        adversarial_tags=["policy_gaming", "hidden_fraud", "multi_agent"],
+        adversarial_pattern="policy_gaming_refund_pressure",
+        delayed_fraud_step_threshold=4,
+        max_steps=10,
+        visible_problem_type="billing",
+    ),
+    ScenarioTemplate(
+        scenario_id="medium_keyword_trap_refund_wording",
+        title="Leaderboard trap with refund keyword but technical intent",
+        subject="Refund maybe? app just crashes",
+        difficulty="medium",
+        sender_tier="standard",
+        account_flags=[],
+        refund_amount=None,
+        age_hours=15,
+        thread_bodies=[
+            "I said refund in the subject, but I dont want money back. The app crashes before checkout every time.",
+            "If this keeps failing, sure maybe then refund later, but first fix the crash.",
+        ],
+        expected_category="technical_support",
+        expected_priority="medium",
+        expected_escalation=False,
+        requires_request_info=True,
+        request_info_first_required=True,
+        response_keywords=["crash", "diagnose", "update", "support"],
+        customer_quality_keywords=["support", "assist", "update"],
+        history_keywords=["dont want money back", "fix the crash"],
+        clarification_keywords=["device", "error", "version"],
+        clarification_body="Android app 12.4 crashes right after tapping checkout.",
+        adversarial_tags=["leaderboard_trap", "mixed_intent"],
+        adversarial_pattern="keyword_refund_trap",
+        max_steps=9,
+        style_noise=True,
+        visible_problem_type="technical_support",
     ),
 ]
 
@@ -518,6 +635,10 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         history_keywords=["waiting", "five days", "follow-up"],
         clarification_keywords=[],
         legal_language=True,
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Confirm legal-risk handling, preserve evidence trail, and provide a dated escalation timeline."
+        ),
         expected_escalation_reason="Customer mentioned legal action.",
         max_steps=8,
     ),
@@ -542,6 +663,7 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         response_keywords=["invoice", "review", "update"],
         history_keywords=["waiting", "follow-up"],
         clarification_keywords=[],
+        requires_specialist_review=True,
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -568,6 +690,7 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         clarification_keywords=["replacement", "refund", "want"],
         clarification_body="Please stop the replacement process and refund the $640 order instead.",
         expected_escalation_reason="Refund exceeds $500.",
+        requires_specialist_review=True,
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -593,6 +716,7 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         history_keywords=["waiting", "follow-up", "suspended"],
         clarification_keywords=[],
         suspended_account=True,
+        requires_specialist_review=True,
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -618,6 +742,7 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         response_keywords=["priority", "urgent", "update"],
         history_keywords=["three days", "follow-up", "weekend"],
         clarification_keywords=[],
+        requires_specialist_review=True,
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -644,6 +769,11 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         history_keywords=["last week", "failed", "agent"],
         clarification_keywords=[],
         expected_escalation_reason="Refund exceeds $500.",
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Validate prior handling failure, confirm escalation ownership, and "
+            "provide corrective timeline."
+        ),
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -669,6 +799,7 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         history_keywords=["vip", "suspended", "morning"],
         clarification_keywords=[],
         suspended_account=True,
+        requires_specialist_review=True,
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -698,7 +829,9 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         expected_flag_fraud=True,
         fraud_keywords=["unauthorized", "card attempts", "duplicate charges"],
         expected_escalation_reason="Policy escalation required by legal and high-value billing risk.",
-        policy_version="v2",
+        policy_version="v1",
+        policy_shift_step=1,
+        policy_shift_to="v2",
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -725,6 +858,7 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         expected_flag_fraud=True,
         fraud_keywords=["chargeback", "multiple cards"],
         policy_version="v2",
+        requires_specialist_review=True,
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -751,6 +885,7 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         expected_flag_fraud=True,
         fraud_keywords=["account takeover", "unknown logins"],
         policy_version="v2",
+        requires_specialist_review=True,
         max_steps=8,
     ),
     ScenarioTemplate(
@@ -777,8 +912,127 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         expected_flag_fraud=True,
         fraud_keywords=["card testing", "policy abuse", "chargeback"],
         expected_escalation_reason="Refund exceeds $500.",
-        policy_version="v2",
+        policy_version="v1",
+        policy_shift_step=2,
+        policy_shift_to="v2",
         max_steps=8,
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_long_horizon_escalation_chain",
+        title="Long-horizon escalation chain with specialist handoff",
+        subject="Still unresolved after repeated billing failures",
+        difficulty="hard",
+        sender_tier="premier",
+        account_flags=["suspended"],
+        refund_amount=820.0,
+        age_hours=68,
+        thread_bodies=[
+            "Our billing controls failed again and this is impacting operations.",
+            "Agent response: We are checking this manually.",
+            "No resolution after another day. We need a concrete timeline now.",
+            "This is the fourth follow-up and leadership is escalating internally.",
+        ],
+        thread_directions=["customer", "agent", "customer", "customer"],
+        expected_category="billing",
+        expected_priority="urgent",
+        expected_escalation=True,
+        requires_request_info=True,
+        request_info_first_required=True,
+        response_keywords=["escalated", "timeline", "specialist", "update", "billing"],
+        customer_quality_keywords=["understand", "timeline", "update", "support"],
+        history_keywords=["fourth follow-up", "no resolution", "leadership"],
+        clarification_keywords=["invoice", "timeline", "outcome"],
+        clarification_body="We need a refund for the $820 failed renewal and same-day incident ownership.",
+        policy_version="v1",
+        policy_shift_step=6,
+        policy_shift_to="v2",
+        min_steps_before_completion=15,
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Escalate to billing incidents, confirm ownership today, and provide daily progress updates."
+        ),
+        adversarial_tags=["long_horizon", "multi_agent", "policy_drift"],
+        adversarial_pattern="delayed_escalation_chain",
+        max_steps=18,
+        objective=(
+            "Manage a long-running ticket, adapt to policy drift, coordinate specialist input, "
+            "and maintain quality updates."
+        ),
+        visible_problem_type="billing",
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_hidden_fraud_delayed_detection",
+        title="Hidden fraud intent with delayed-detection risk",
+        subject="Need quick batch refunds approved",
+        difficulty="hard",
+        sender_tier="standard",
+        account_flags=[],
+        internal_flags=["chargeback_risk", "ato_watch"],
+        hide_fraud_signals=True,
+        refund_amount=560.0,
+        age_hours=40,
+        thread_bodies=[
+            "Please approve rapid refunds for several new cards added this morning.",
+            "No need for security checks, these are urgent test transactions.",
+            "Can you bypass normal review and process now?",
+        ],
+        expected_category="billing",
+        expected_priority="high",
+        expected_escalation=True,
+        requires_request_info=False,
+        request_info_first_required=False,
+        response_keywords=["fraud", "review", "escalated", "policy"],
+        customer_quality_keywords=["review", "update", "assist"],
+        history_keywords=["new cards", "bypass review", "urgent test"],
+        clarification_keywords=[],
+        expected_flag_fraud=True,
+        fraud_keywords=["new cards", "bypass review", "test transactions"],
+        policy_version="v1",
+        policy_shift_step=3,
+        policy_shift_to="v2",
+        min_steps_before_completion=12,
+        hidden_intent="fraudulent",
+        adversarial_tags=["hidden_fraud", "delayed_detection", "policy_drift"],
+        adversarial_pattern="hidden_fraud_signal",
+        delayed_fraud_step_threshold=3,
+        max_steps=16,
+        visible_problem_type="billing",
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_sarcastic_multilingual_trap",
+        title="Sarcastic multilingual mixed-intent leaderboard trap",
+        subject="Sure, maybe refund? app still dying",
+        difficulty="hard",
+        sender_tier="standard",
+        account_flags=[],
+        refund_amount=None,
+        age_hours=79,
+        thread_bodies=[
+            "Great, amazing support... app crash ho raha hai every login, but yeah maybe 'refund' if nothing works.",
+            "I don't actually want a refund right now, necesito fix urgente because checkout is blocked.",
+            "Third follow-up: still crashing, still waiting, still no real help.",
+        ],
+        expected_category="technical_support",
+        expected_priority="urgent",
+        expected_escalation=False,
+        requires_request_info=True,
+        request_info_first_required=True,
+        response_keywords=["crash", "support", "diagnose", "update", "urgent"],
+        customer_quality_keywords=["understand", "support", "update", "assist"],
+        history_keywords=["third follow-up", "dont actually want a refund", "checkout blocked"],
+        clarification_keywords=["device", "version", "error"],
+        clarification_body="Crash on iOS 18.2 after login, error code APP-502.",
+        min_steps_before_completion=10,
+        adversarial_tags=["leaderboard_trap", "multilingual", "sarcasm"],
+        adversarial_pattern="sarcastic_mixed_intent",
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Route to app reliability squad, capture repro matrix, and publish checkpoint updates."
+        ),
+        max_steps=15,
+        style_noise=True,
+        emotional_tone=True,
+        visible_problem_type="technical_support",
     ),
     ScenarioTemplate(
         scenario_id="hard_premier_same_day_v2",
@@ -802,7 +1056,193 @@ HARD_TEMPLATES: list[ScenarioTemplate] = [
         history_keywords=["same-day", "following up"],
         clarification_keywords=[],
         policy_version="v2",
+        requires_specialist_review=True,
         max_steps=8,
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_checkout_refund_trap_long",
+        title="Long mixed-intent checkout outage with refund trap wording",
+        subject="Refund mention but checkout outage is the real issue",
+        difficulty="hard",
+        sender_tier="standard",
+        account_flags=[],
+        refund_amount=None,
+        age_hours=86,
+        thread_bodies=[
+            "Checkout times out after OTP and carts fail to submit for multiple users.",
+            "I wrote refund in the subject, but please do not auto-refund, we need checkout fixed first.",
+            "Fourth follow-up: app version 12.9 still crashes at checkout, please diagnose not refund.",
+        ],
+        expected_category="technical_support",
+        expected_priority="urgent",
+        expected_escalation=False,
+        requires_request_info=True,
+        request_info_first_required=True,
+        response_keywords=["checkout", "crash", "diagnose", "update", "timeline"],
+        history_keywords=["fourth follow-up", "do not auto-refund", "version 12.9"],
+        clarification_keywords=["device", "error code", "repro"],
+        clarification_body="Android 15, error PAY-431 after OTP confirmation.",
+        min_steps_before_completion=11,
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Route to checkout reliability engineers, capture reproducible traces, and publish timeline."
+        ),
+        adversarial_tags=["leaderboard_trap", "mixed_intent", "long_horizon"],
+        adversarial_pattern="keyword_refund_trap",
+        max_steps=16,
+        objective=(
+            "Disambiguate mixed intent, avoid refund-keyword traps, and provide technically grounded updates."
+        ),
+        visible_problem_type="technical_support",
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_processed_refund_gateway_failure",
+        title="Processed refund history but unresolved gateway failure",
+        subject="Refund done already, gateway still failing",
+        difficulty="hard",
+        sender_tier="standard",
+        account_flags=[],
+        refund_amount=None,
+        age_hours=58,
+        thread_bodies=[
+            "Refund TX-9912 was already processed yesterday and confirmed by your team.",
+            "The real issue now is gateway API 502 on every checkout attempt.",
+            "Please do not issue another refund, we need a technical fix and deployment timeline.",
+        ],
+        expected_category="technical_support",
+        expected_priority="high",
+        expected_escalation=False,
+        requires_request_info=True,
+        request_info_first_required=True,
+        response_keywords=["gateway", "api", "diagnose", "timeline", "deploy"],
+        history_keywords=["processed yesterday", "do not issue another refund", "api 502"],
+        clarification_keywords=["region", "request id", "timestamp"],
+        clarification_body="Gateway API 502 in us-east-1 for request IDs starting with 7f2a.",
+        min_steps_before_completion=9,
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Engage payments platform engineering and provide hourly deployment checkpoints."
+        ),
+        adversarial_tags=["strategic_deception", "mixed_intent", "history_conflict"],
+        adversarial_pattern="refund_already_processed",
+        max_steps=14,
+        visible_problem_type="technical_support",
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_hidden_risk_policy_shift",
+        title="Hidden risk intent that activates with policy shift",
+        subject="Need rapid approvals for unusual payment reversals",
+        difficulty="hard",
+        sender_tier="standard",
+        account_flags=[],
+        internal_flags=["chargeback_risk"],
+        hide_fraud_signals=True,
+        refund_amount=620.0,
+        age_hours=38,
+        thread_bodies=[
+            "We need rapid approval for several reversal corrections linked to newly added payment methods.",
+            "Please skip manual risk checks because this was internal QA activity.",
+            "Need this closed today without fraud workflow delays.",
+        ],
+        expected_category="billing",
+        expected_priority="high",
+        expected_escalation=True,
+        requires_request_info=False,
+        request_info_first_required=False,
+        response_keywords=["review", "risk", "escalated", "policy", "update"],
+        history_keywords=["newly added payment methods", "skip manual risk checks", "workflow delays"],
+        clarification_keywords=[],
+        expected_flag_fraud=True,
+        fraud_keywords=["newly added payment methods", "skip manual risk checks", "rapid reversals"],
+        policy_version="v1",
+        policy_shift_step=2,
+        policy_shift_to="v2",
+        hidden_intent="policy_gaming",
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Treat as high-risk abuse pattern, flag fraud, and escalate to risk operations."
+        ),
+        adversarial_tags=["policy_gaming", "hidden_fraud", "policy_drift"],
+        adversarial_pattern="policy_gaming_refund_pressure",
+        delayed_fraud_step_threshold=3,
+        min_steps_before_completion=10,
+        max_steps=15,
+        visible_problem_type="billing",
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_invoice_wording_access_outage",
+        title="Invoice wording masks an access outage",
+        subject="Invoice looked odd but access is blocked",
+        difficulty="hard",
+        sender_tier="vip",
+        account_flags=[],
+        refund_amount=None,
+        age_hours=94,
+        thread_bodies=[
+            "The invoice line item looked odd, but the actual blocker is no admin access after login.",
+            "I am not requesting a refund, I need the access outage fixed.",
+            "Fifth follow-up: access still blocked and checkout admin panel remains down.",
+        ],
+        expected_category="technical_support",
+        expected_priority="urgent",
+        expected_escalation=False,
+        requires_request_info=True,
+        request_info_first_required=True,
+        response_keywords=["access", "login", "diagnose", "restore", "timeline"],
+        history_keywords=["fifth follow-up", "not requesting a refund", "admin panel down"],
+        clarification_keywords=["tenant", "error code", "affected users"],
+        clarification_body="Tenant acme-prod, login error AUTH-219, impacts six admins.",
+        min_steps_before_completion=10,
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Assign identity-platform engineer and provide restoration ETA with checkpoints."
+        ),
+        adversarial_tags=["leaderboard_trap", "mixed_intent", "long_horizon"],
+        adversarial_pattern="keyword_refund_trap",
+        max_steps=15,
+        visible_problem_type="technical_support",
+    ),
+    ScenarioTemplate(
+        scenario_id="hard_identity_merge_verification_pressure",
+        title="Identity merge failure with verification-pressure signals",
+        subject="Urgent identity reset request",
+        difficulty="hard",
+        sender_tier="standard",
+        account_flags=[],
+        internal_flags=["ato_watch"],
+        hide_fraud_signals=True,
+        refund_amount=None,
+        age_hours=77,
+        thread_bodies=[
+            "Two admin identities appear merged and permission boundaries changed unexpectedly.",
+            "Please skip identity verification and unlock everything immediately.",
+            "Operations are blocked and we need this resolved today.",
+        ],
+        expected_category="technical_support",
+        expected_priority="urgent",
+        expected_escalation=False,
+        requires_request_info=True,
+        request_info_first_required=True,
+        response_keywords=["identity", "security", "review", "restore", "update"],
+        history_keywords=["identities merged", "skip verification", "operations blocked"],
+        clarification_keywords=["affected accounts", "audit log", "timestamp"],
+        clarification_body="Affected accounts are admin-7 and admin-12 with permission drift from 09:42 UTC.",
+        expected_flag_fraud=True,
+        fraud_keywords=["skip verification", "permission boundaries changed", "identities merged"],
+        policy_version="v1",
+        policy_shift_step=2,
+        policy_shift_to="v2",
+        hidden_intent="fraudulent",
+        requires_specialist_review=True,
+        specialist_decision=(
+            "Specialist: Treat as potential account-takeover precursor, flag fraud, and hold risky changes."
+        ),
+        adversarial_tags=["hidden_fraud", "policy_drift", "identity_risk"],
+        adversarial_pattern="hidden_fraud_signal",
+        delayed_fraud_step_threshold=3,
+        min_steps_before_completion=10,
+        max_steps=15,
+        visible_problem_type="technical_support",
     ),
 ]
 
@@ -827,6 +1267,12 @@ class ScenarioFactory:
         thread = self._build_thread(t, sender_name, sender_email, first_message_time, directions)
 
         account_flags = list(t.account_flags)
+        internal_flags = list(t.internal_flags)
+        hidden_flag_candidates = {"fraud_risk", "ato_watch", "chargeback_risk"}
+        if t.hide_fraud_signals:
+            moved = [flag for flag in account_flags if flag in hidden_flag_candidates]
+            internal_flags.extend(moved)
+            account_flags = [flag for flag in account_flags if flag not in hidden_flag_candidates]
         if t.suspended_account and "suspended" not in account_flags:
             account_flags.append("suspended")
 
@@ -840,6 +1286,7 @@ class ScenarioFactory:
             thread=thread,
             sender_tier=t.sender_tier,
             account_flags=account_flags,
+            internal_flags=internal_flags,
             refund_amount=initial_refund_amount,
             order_id=f"ORD-{order_seed:04d}",
             visible_problem_type=t.visible_problem_type,
@@ -856,7 +1303,7 @@ class ScenarioFactory:
                         message_id=f"{t.scenario_id}_clarification",
                         timestamp=clarification_time,
                         subject=f"Re: {t.subject}",
-                        body=t.clarification_body,
+                        body=self._stylize_body(t.clarification_body, t.style_noise, t.emotional_tone),
                         sender_name=sender_name,
                         sender_email=sender_email,
                         direction="customer",
@@ -864,6 +1311,7 @@ class ScenarioFactory:
                 ],
                 sender_tier=t.sender_tier,
                 account_flags=account_flags,
+                internal_flags=internal_flags,
                 refund_amount=t.refund_amount,
                 order_id=f"ORD-{order_seed:04d}",
                 visible_problem_type=t.expected_category,
@@ -879,6 +1327,16 @@ class ScenarioFactory:
             completion_actions.append("escalate")
         if t.difficulty in {"medium", "hard"}:
             completion_actions.append("draft_response")
+        if t.requires_specialist_review:
+            completion_actions.append("consult_specialist")
+
+        customer_quality_keywords = (
+            t.customer_quality_keywords
+            if t.customer_quality_keywords
+            else ["update", "timeline", "next step", "review"]
+            if t.difficulty == "hard"
+            else []
+        )
 
         default_objective = {
             "easy": "Classify the ticket, set priority, and follow active business policy rules.",
@@ -897,6 +1355,15 @@ class ScenarioFactory:
             max_steps=t.max_steps,
             now=self._base_now,
             policy_version=t.policy_version,
+            policy_shift_step=t.policy_shift_step,
+            policy_shift_to=t.policy_shift_to,
+            cost_budget=t.cost_budget
+            if t.cost_budget is not None
+            else {"easy": 0.2, "medium": 0.24, "hard": 0.25}[t.difficulty],
+            min_steps_before_completion=t.min_steps_before_completion,
+            hidden_intent=t.hidden_intent,
+            specialist_decision=t.specialist_decision,
+            adversarial_tags=t.adversarial_tags,
             initial_snapshot=initial_snapshot,
             clarification_snapshot=clarification_snapshot,
             ground_truth=GroundTruth(
@@ -910,9 +1377,13 @@ class ScenarioFactory:
                 request_info_first_required=t.request_info_first_required,
                 clarification_keywords=t.clarification_keywords,
                 response_keywords=t.response_keywords,
+                customer_quality_keywords=customer_quality_keywords,
                 history_keywords=t.history_keywords,
                 completion_action_types=completion_actions,
                 ambiguous=t.requires_request_info,
+                requires_specialist_review=t.requires_specialist_review,
+                adversarial_pattern=t.adversarial_pattern,
+                delayed_fraud_step_threshold=t.delayed_fraud_step_threshold,
             ),
         )
 
@@ -922,6 +1393,24 @@ class ScenarioFactory:
         if len(t.thread_directions) >= len(t.thread_bodies):
             return t.thread_directions[: len(t.thread_bodies)]
         return t.thread_directions + ["customer"] * (len(t.thread_bodies) - len(t.thread_directions))
+
+    def _stylize_body(self, body: str, style_noise: bool, emotional_tone: bool) -> str:
+        styled = body
+        if style_noise:
+            replacements = {
+                "don't": "dont",
+                "please": "pls",
+                "because": "cuz",
+                "your": "ur",
+                "really": "rly",
+                "cannot": "cant",
+            }
+            for source, target in replacements.items():
+                styled = styled.replace(source, target)
+                styled = styled.replace(source.capitalize(), target)
+        if emotional_tone and "!" not in styled:
+            styled = f"{styled} This is incredibly frustrating."
+        return styled
 
     def _build_thread(
         self,
@@ -941,7 +1430,7 @@ class ScenarioFactory:
 
         thread: list[EmailMessage] = []
         for index, body in enumerate(t.thread_bodies, start=1):
-            message_body = body
+            message_body = self._stylize_body(body, t.style_noise, t.emotional_tone)
             if t.legal_language and index == len(t.thread_bodies):
                 lowered = message_body.lower()
                 if "legal action" not in lowered and "lawyer" not in lowered and "lawsuit" not in lowered:
