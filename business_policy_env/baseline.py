@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 from statistics import mean, pstdev
 from typing import Any, Protocol
 
@@ -204,20 +205,48 @@ class OpenAIBaselineAgent:
             "action_history": [record.model_dump(mode="json") for record in observation.action_history],
             "episode_phase": observation.episode_phase,
         }
-        response = self._client.responses.create(
+        completion = self._client.chat.completions.create(
             model=self._model,
-            input=[
+            temperature=0.0,
+            response_format={"type": "json_object"},
+            messages=[
                 {
-                    "role": "system",
+                    "role": "system",  # type: ignore[dict-item]
                     "content": (
                         "You are a customer-support policy agent. Return exactly one JSON object "
                         "that matches the Action schema."
                     ),
                 },
-                {"role": "user", "content": json.dumps(prompt)},
+                {"role": "user", "content": json.dumps(prompt)},  # type: ignore[dict-item]
             ],
         )
-        return Action.model_validate_json(response.output_text)
+        raw_content = completion.choices[0].message.content or ""
+        if isinstance(raw_content, list):
+            # Some providers can return structured content segments.
+            raw_text = "".join(
+                segment.get("text", "") if isinstance(segment, dict) else str(segment)
+                for segment in raw_content
+            )
+        else:
+            raw_text = str(raw_content)
+        raw_text = raw_text.strip()
+
+        try:
+            return Action.model_validate_json(raw_text)
+        except Exception:
+            match = re.search(r"\{[\s\S]*\}", raw_text)
+            if match:
+                try:
+                    return Action.model_validate_json(match.group(0))
+                except Exception:
+                    pass
+
+        # Robust fallback so baseline runs don't crash if provider returns malformed text.
+        return Action(
+            action_type="request_info",
+            reasoning="LLM output parse fallback triggered due non-JSON completion.",
+            clarifying_question="Can you confirm the ticket reference and desired resolution?",
+        )
 
 
 def run_episode(env: BusinessPolicyComplianceEnv, agent: _Agent, scenario_id: str) -> dict[str, Any]:
