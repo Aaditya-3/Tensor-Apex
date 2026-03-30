@@ -178,11 +178,17 @@ class OpenAIBaselineAgent:
         except ImportError as exc:  # pragma: no cover - optional path
             raise RuntimeError("openai package is not installed.") from exc
 
-        api_key = os.getenv("OPENAI_API_KEY")
+        # Competition runner may provide HF_TOKEN/API_BASE_URL.
+        api_key = os.getenv("OPENAI_API_KEY") or os.getenv("HF_TOKEN")
         if not api_key:
-            raise RuntimeError("OPENAI_API_KEY is required for the OpenAI baseline.")
+            raise RuntimeError("OPENAI_API_KEY or HF_TOKEN is required for the OpenAI baseline.")
 
-        self._client = OpenAI(api_key=api_key)
+        base_url = os.getenv("OPENAI_BASE_URL") or os.getenv("API_BASE_URL")
+
+        client_kwargs: dict[str, str] = {"api_key": api_key}
+        if base_url:
+            client_kwargs["base_url"] = base_url
+        self._client = OpenAI(**client_kwargs)
         self._model = model
 
     def next_action(self, observation: Observation) -> Action:  # pragma: no cover - optional path

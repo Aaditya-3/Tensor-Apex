@@ -4,7 +4,7 @@ emoji: "✅"
 colorFrom: blue
 colorTo: indigo
 sdk: docker
-app_port: 7861
+app_port: 7860
 short_description: Policy-aware customer resolution environment for OpenEnv agents.
 ---
 
@@ -186,6 +186,33 @@ Current means (54 scenarios, latest local run):
 
 Baseline runs are deterministic by default (fixed variation seed). Override with `--seed` when you want alternate perturbation sweeps.
 
+## Competition Inference Script (`inference.py`)
+
+For hackathon pre-validation, the root-level inference script is:
+- `inference.py`
+
+It supports two modes:
+- `--agent openai` (default): uses OpenAI client with required env vars
+- `--agent rule`: deterministic no-API baseline
+
+Required env vars for OpenAI mode:
+- `API_BASE_URL`
+- `MODEL_NAME`
+- `HF_TOKEN`
+
+Example:
+```bash
+export API_BASE_URL="https://router.huggingface.co/v1"
+export MODEL_NAME="openai/gpt-4.1-mini"
+export HF_TOKEN="hf_xxx"
+python inference.py --seed 42
+```
+
+Deterministic fallback:
+```bash
+python inference.py --agent rule --seed 42
+```
+
 ## Project Layout
 
 ```text
@@ -246,8 +273,23 @@ bash scripts/self_check.sh
 Contract validation and runtime-proof helper scripts:
 - `scripts/validate_openenv_contract.py`
 - `scripts/docker_smoke.sh`
+- `scripts/validate-submission.sh`
 
 CI includes a dedicated `runtime-proof` job that uploads validation/runtime artifacts.
+
+## Pre-Submission Validator
+
+Run the provided validator locally before submitting:
+
+```bash
+chmod +x scripts/validate-submission.sh
+./scripts/validate-submission.sh https://your-space.hf.space .
+```
+
+This checks:
+- HF Space `/reset` responds with HTTP 200
+- Dockerfile builds
+- `openenv validate` passes
 
 ## Docker
 
